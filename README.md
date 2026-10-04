@@ -1,6 +1,6 @@
 # Local Data Logger — Complemento para NVDA
 
-**Versión:** 1.0.0  
+**Versión:** 1.1.0  
 **Autor:** Agustin Martinez  
 **Licencia:** GNU GPL v2  
 **Compatibilidad:** NVDA 2026.1 o superior  
@@ -23,6 +23,7 @@ Funciona tanto en **navegadores web** (Chrome, Firefox, Edge, etc.) como en **ap
 - **Registro en modo *append*:** Los datos se añaden al archivo del día sin sobreescribir nada. El archivo sigue el formato `AAAA-MM-DD.txt`.
 - **Sin tráfico de red:** Todo ocurre localmente; no se envía ningún dato a servidores externos.
 - **Retroalimentación audible:** Beeps y mensajes de voz confirman cada acción (marcar, desmarcar, registrar).
+- **Opciones configurables:** el pitido y el anuncio al enfocar un campo marcado se activan o desactivan en **NVDA → Preferencias → Opciones → Local Data Logger**.
 - **Panel de gestión completo:** Permite revisar, renombrar y eliminar campos marcados, configurar el directorio de salida y abrir la carpeta de registros directamente desde NVDA.
 
 ---
@@ -45,7 +46,7 @@ Funciona tanto en **navegadores web** (Chrome, Firefox, Edge, etc.) como en **ap
 
 1. **Marcar campos:** Navega hasta cada campo del formulario que quieras registrar y presiona `NVDA + Shift + M`. NVDA anunciará «Objeto marcado para registro» y emitirá un doble beep ascendente. Al volver a enfocar ese campo en el futuro, un beep te recordará que está marcado.
 
-2. **Registrar una gestión:** Una vez completado el formulario, presiona `NVDA + Shift + R`. El complemento recorre todos los campos marcados en ese contexto, captura sus valores actuales y los añade al archivo del día.
+2. **Registrar una gestión:** Una vez completado el formulario, presiona `NVDA + Shift + R`. El complemento recorre todos los campos marcados en ese contexto, captura sus valores actuales y los añade al archivo del día. Si algún campo marcado no se encuentra en pantalla, se registra como `[no encontrado]` y NVDA lo avisa.
 
 3. **Revisar el registro:** Los archivos se guardan en `Documentos\LocalDataLogger\` (o la carpeta que hayas configurado) con el nombre `AAAA-MM-DD.txt`. Puedes abrirlos con cualquier editor de texto.
 
@@ -55,23 +56,33 @@ Funciona tanto en **navegadores web** (Chrome, Firefox, Edge, etc.) como en **ap
 
 ```
 FECHA: 2026-05-21
+Aplicación: chrome
 URL: https://ejemplo.com/formulario
 ------------------------------------------
+HORA: 10:15:32
 Nombre: Juan Pérez
 Número de expediente: 12345
 Observaciones: Sin novedad
 ------------------------------------------
-URL: https://ejemplo.com/formulario
-------------------------------------------
+HORA: 10:21:07
 Nombre: María García
 Número de expediente: 67890
 Observaciones: Requiere seguimiento
 ------------------------------------------
+Aplicación: notepad - Sin título
+------------------------------------------
+HORA: 10:30:44
+Nota: Llamada pendiente
+------------------------------------------
 ```
 
 - La primera línea del archivo del día es la fecha (solo aparece una vez).
-- Cada gestión comienza con `URL:` (o el identificador de la ventana nativa) y termina con una línea de guiones.
-- Si el archivo ya existe al volver al día siguiente, el nuevo bloque se añade al final.
+- La cabecera de contexto (`Aplicación:` y, en navegadores, `URL:`) solo se escribe cuando es distinta de la **última** cabecera del archivo. Las gestiones consecutivas en el mismo sitio o ventana quedan bajo una única cabecera. Si se vuelve a un sitio anterior después de registrar en otro, su cabecera se repite para que no haya dudas sobre a qué sitio pertenece cada gestión.
+- Cada gestión empieza con `HORA:` y termina con una línea de guiones.
+- Los campos de texto vacíos se registran vacíos; las casillas se registran como `marcado` / `no marcado`.
+- Si el archivo del día ya existe, los nuevos bloques se añaden al final.
+
+> **Privacidad:** los registros se guardan en texto plano, sin cifrar. Si contienen datos personales o sensibles, guárdalos en una carpeta protegida y elimínalos cuando ya no sean necesarios.
 
 ---
 
@@ -90,7 +101,7 @@ El panel permite:
 
 ## Instalación
 
-1. Descarga el archivo `localDataLogger1.0.0.nvdaaddon`.
+1. Descarga el archivo `localDataLogger1.1.0.nvda-addon`.
 2. Abre el archivo con NVDA (doble clic o Intro sobre él).
 3. Acepta la instalación cuando NVDA lo solicite.
 4. Reinicia NVDA si se te pide.
@@ -103,24 +114,37 @@ Ve a **NVDA → Herramientas → Administrar complementos**, selecciona *Local D
 
 ---
 
-## Estructura interna del complemento
+## Estructura del repositorio
 
 ```
-globalPlugins/
-  localDataLogger/
-    __init__.py          ← Punto de entrada, atajos y lógica principal
-    elementRegistry.py   ← Registro persistente de campos marcados (JSON)
-    fileWriter.py        ← Escritura de archivos diarios en modo append
-    managementDialog.py  ← Diálogo de gestión (wxPython)
-doc/
-  en/readme.html         ← Documentación en inglés
-  es/readme.html         ← Documentación en español
-locale/
-  en/LC_MESSAGES/        ← Traducciones al inglés
-  es/LC_MESSAGES/        ← Traducciones al español
-manifest.ini             ← Metadatos del complemento
-LICENSE.txt              ← Licencia GNU GPL v2
+addon/                     ← Código fuente del complemento
+  globalPlugins/
+    localDataLogger/
+      __init__.py          ← Punto de entrada, atajos y lógica principal
+      addonConfig.py       ← Opciones guardadas en nvda.ini
+      elementRegistry.py   ← Registro persistente de campos marcados (JSON)
+      fileWriter.py        ← Escritura de archivos diarios en modo append
+      managementDialog.py  ← Diálogo de gestión (wxPython)
+      settingsPanel.py     ← Panel en Preferencias → Opciones
+  doc/
+    en/readme.html         ← Documentación (inglés; por ahora, copia de la española)
+    es/readme.html         ← Documentación en español
+  manifest.ini             ← Metadatos del complemento
+  LICENSE.txt              ← Licencia GNU GPL v2
+tests/                     ← Tests unitarios (no requieren NVDA)
+build.py                   ← Genera el archivo .nvda-addon
 ```
+
+---
+
+## Desarrollo
+
+```
+python -m unittest discover -s tests   # tests
+python build.py                        # genera localDataLogger<versión>.nvda-addon
+```
+
+GitHub Actions ejecuta los tests y genera el `.nvda-addon` en cada push.
 
 ---
 
