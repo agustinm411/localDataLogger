@@ -13,9 +13,13 @@ import os
 import subprocess
 import sys
 
+import addonHandler
 import wx
-import gui
 from gui import guiHelper
+
+from .fileWriter import ensureOutputDir
+
+addonHandler.initTranslation()
 
 
 class ManagementDialog(wx.Dialog):
@@ -87,6 +91,7 @@ class ManagementDialog(wx.Dialog):
 		closeBtn = closeRow.addButton(self, id=wx.ID_CLOSE, label=_("&Cerrar"))
 		closeBtn.Bind(wx.EVT_BUTTON, self._onClose)
 		self.SetEscapeId(wx.ID_CLOSE)
+		self.Bind(wx.EVT_CLOSE, self._onClose)
 		helper.addItem(closeRow)
 
 		self.SetSizer(mainSizer)
@@ -151,13 +156,7 @@ class ManagementDialog(wx.Dialog):
 		)
 		try:
 			if dlg.ShowModal() == wx.ID_OK:
-				newLabel = dlg.GetValue().strip()
-				if newLabel:
-					with self._registry._lock:
-						stored = self._registry._data.get(ctx, [])
-						if sel < len(stored):
-							stored[sel]["label"] = newLabel
-							self._registry._save()
+				if self._registry.renameLabel(ctx, sel, dlg.GetValue()):
 					self._refreshFields()
 					self._fieldsList.SetSelection(sel)
 		finally:
@@ -168,13 +167,7 @@ class ManagementDialog(wx.Dialog):
 		sel = self._fieldsList.GetSelection()
 		if ctx is None or sel == wx.NOT_FOUND:
 			return
-		with self._registry._lock:
-			stored = self._registry._data.get(ctx, [])
-			if sel < len(stored):
-				del stored[sel]
-				if not stored:
-					del self._registry._data[ctx]
-				self._registry._save()
+		self._registry.removeAt(ctx, sel)
 		if not self._registry.getMarksForContext(ctx):
 			self._refreshContexts()
 		else:
@@ -232,6 +225,17 @@ class ManagementDialog(wx.Dialog):
 
 	def _onClose(self, evt):
 		path = self._outputCtrl.GetValue().strip()
-		if path:
-			self._setOutputDir(path)
+		if path and path != self._getOutputDir():
+			if not ensureOutputDir(path):
+				# Translators: error si no se puede usar el directorio indicado
+				wx.MessageBox(
+					_("No se puede crear ni usar el directorio «{path}». Indique otro o déjelo vacío para usar el directorio por defecto.").format(path=path),
+					_("Directorio no válido"),
+					wx.OK | wx.ICON_ERROR,
+					self,
+				)
+				self._outputCtrl.SetFocus()
+				return
+		# Un valor vacío restablece el directorio por defecto.
+		self._setOutputDir(path)
 		self.EndModal(wx.ID_CLOSE)

@@ -22,44 +22,58 @@ de gestión.
 """
 
 import os
+from collections import deque
 
+import addonHandler
 import globalPluginHandler
 import api
+import controlTypes
 import ui
 import tones
-import config
 import gui
 import wx
+from gui.settingsDialogs import NVDASettingsDialog
 from scriptHandler import script
 from logHandler import log
 
-from .elementRegistry import ElementRegistry, getContextKey
+from . import addonConfig
+from .elementRegistry import (
+	ElementRegistry,
+	buildSignature,
+	getContextKey,
+	quickKey,
+	signaturesMatch,
+)
 from .fileWriter import writeEntry, getDailyFilePath
 from .managementDialog import ManagementDialog
+from .settingsPanel import LocalDataLoggerSettingsPanel
+
+addonHandler.initTranslation()
 
 
-_CONFIG_SECTION = "localDataLogger"
-_CONFIG_KEY_OUTPUT_DIR = "outputDir"
-_CONFIG_KEY_ANNOUNCE_MARKED = "announceMarked"
-_CONFIG_KEY_BEEP_MARKED = "beepMarked"
+_MAX_CAPTURE_NODES = 5000
 
 
-def _defaultOutputDir():
-	"""Directorio por defecto para los registros: ~/Documents/LocalDataLogger."""
-	home = os.path.expanduser("~")
-	docs = os.path.join(home, "Documents")
-	base = docs if os.path.isdir(docs) else home
-	return os.path.join(base, "LocalDataLogger")
+def _roles(*names):
+	"""Conjunto de roles de controlTypes que existan en esta versión de NVDA."""
+	result = set()
+	for name in names:
+		role = getattr(controlTypes.Role, name, None)
+		if role is not None:
+			result.add(role)
+	return frozenset(result)
 
 
-def _initConfigDefaults():
-	"""Garantiza que la sección del add-on existe en config.conf."""
-	confSpec = {
-		_CONFIG_KEY_OUTPUT_DIR: f'string(default="{_defaultOutputDir()}")',
-		_CONFIG_KEY_ANNOUNCE_MARKED: "boolean(default=True)",
-		_CONFIG_KEY_BEEP_MARKED: "boolean(default=True)",
-	}
-	config.conf.spec[_CONFIG_SECTION] = confSpec
+# Controles de dos estados: se registra "marcado" / "no marcado".
+_CHECKABLE_ROLES = _roles("CHECKBOX", "TOGGLEBUTTON", "SWITCH", "CHECKMENUITEM")
+# Controles de opción: se registra "seleccionado" / "no seleccionado".
+_RADIO_ROLES = _roles("RADIOBUTTON", "RADIOMENUITEM")
+# Controles cuyo valor es lo que escribe o elige el usuario. Su nombre es
+# la etiqueta del campo, así que nunca se usa como valor.
+_VALUE_ROLES = _roles(
+	"EDITABLETEXT", "PASSWORDEDIT", "COMBOBOX", "SPINBUTTON", "SLIDER",
+	"LIST", "DATEEDITOR", "TIMEEDITOR",
+)
 
 
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
@@ -68,36 +82,18 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	def __init__(self):
 		super().__init__()
-		_initConfigDefaults()
+		addonConfig.initConfigDefaults()
 		self._registry = ElementRegistry()
 		self._lastAnnouncedObj = None
+		NVDASettingsDialog.categoryClasses.append(LocalDataLoggerSettingsPanel)
 
 	def terminate(self):
+		try:
+			NVDASettingsDialog.categoryClasses.remove(LocalDataLoggerSettingsPanel)
+		except ValueError:
+			pass
+		self._lastAnnouncedObj = None
 		super().terminate()
-
-	def _getOutputDir(self):
-		try:
-			return config.conf[_CONFIG_SECTION][_CONFIG_KEY_OUTPUT_DIR]
-		except Exception:
-			return _defaultOutputDir()
-
-	def _setOutputDir(self, path):
-		try:
-			config.conf[_CONFIG_SECTION][_CONFIG_KEY_OUTPUT_DIR] = path
-		except Exception as e:
-			log.error(f"localDataLogger: no se pudo guardar outputDir: {e}")
-
-	def _announceEnabled(self):
-		try:
-			return bool(config.conf[_CONFIG_SECTION][_CONFIG_KEY_ANNOUNCE_MARKED])
-		except Exception:
-			return True
-
-	def _beepEnabled(self):
-		try:
-			return bool(config.conf[_CONFIG_SECTION][_CONFIG_KEY_BEEP_MARKED])
-		except Exception:
-			return True
 
 	def event_gainFocus(self, obj, nextHandler):
 		"""
@@ -110,49 +106,100 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			try:
 				if obj is None or obj is self._lastAnnouncedObj:
 					return
+				# isMarked descarta en primer lugar, sin coste, los objetos
+				# cuyo rol y nombre no coinciden con ninguna marca.
 				if not self._registry.isMarked(obj):
 					return
 				self._lastAnnouncedObj = obj
-				if self._beepEnabled():
+				if addonConfig.beepEnabled():
 					tones.beep(880, 40)
-				if self._announceEnabled():
+				if addonConfig.announceEnabled():
 					# Translators: aviso al enfocar un campo marcado
 					ui.message(_("marcado para registro"))
 			except Exception as e:
 				log.error(f"localDataLogger: error en event_gainFocus: {e}")
 
 	def _extractValue(self, obj):
-		"""Devuelve el valor exportable de un objeto (input, textarea, etiqueta)."""
-		if obj is None:
+		"""
+		Devuelve el valor exportable de un objeto.
+
+		En campos de entrada (textos, combos, listas...) solo se usa
+		'value': su nombre es la etiqueta del campo, no el dato. Las
+		casillas devuelven "marcado"/"no marcado" y los botones de opción
+		"seleccionado"/"no seleccionado". En el resto (p. ej. textos
+		estáticos) se usa 'value' y, si está vacío, el nombre.
+		"""
+		try:
+			role = obj.role
+		except Exception:
+			role = None
+		try:
+			states = obj.states or set()
+		except Exception:
+			states = set()
+
+		if role in _CHECKABLE_ROLES:
+			return "marcado" if controlTypes.State.CHECKED in states else "no marcado"
+		if role in _RADIO_ROLES:
+			checked = controlTypes.State.CHECKED in states or controlTypes.State.SELECTED in states
+			return "seleccionado" if checked else "no seleccionado"
+
+		try:
+			value = obj.value
+		except Exception:
+			value = None
+		if value:
+			return str(value)
+		if role in _VALUE_ROLES or controlTypes.State.EDITABLE in states:
 			return ""
 		try:
-			value = getattr(obj, "value", None)
-			if value:
-				return str(value)
+			return (obj.name or "").strip()
 		except Exception:
-			pass
+			return ""
+
+	@staticmethod
+	def _iterObjects(start, maxNodes=_MAX_CAPTURE_NODES):
+		"""Recorre en anchura el árbol de objetos a partir de 'start'."""
+		queue = deque([start])
+		seen = 0
+		while queue and seen < maxNodes:
+			current = queue.popleft()
+			seen += 1
+			yield current
+			try:
+				child = current.firstChild
+			except Exception:
+				child = None
+			while child is not None:
+				queue.append(child)
+				try:
+					child = child.next
+				except Exception:
+					break
+
+	@staticmethod
+	def _captureRoot(focus):
+		"""Raíz desde la que buscar los campos: el documento o la ventana superior."""
 		try:
-			import controlTypes
-			states = getattr(obj, "states", set()) or set()
-			if controlTypes.State.CHECKED in states:
-				return "marcado"
-			if controlTypes.State.SELECTED in states:
-				return "seleccionado"
+			ti = focus.treeInterceptor
+			root = ti.rootNVDAObject if ti is not None else None
 		except Exception:
-			pass
+			root = None
+		if root is not None:
+			return root
+		root = focus
 		try:
-			name = (obj.name or "").strip()
-			if name:
-				return name
+			while root.parent is not None:
+				root = root.parent
 		except Exception:
 			pass
-		return ""
+		return root
 
 	def _captureCurrentContext(self):
 		"""
 		Captura los valores de todos los objetos marcados en el contexto
-		actual. Devuelve (url, [(etiqueta, valor), ...]) o (None, None) si
-		no hay nada que registrar.
+		actual. Devuelve (contexto, [(etiqueta, valor), ...]) o (None, None)
+		si no hay foco. Un valor None indica que el campo no se encontró.
 		"""
 		focus = api.getFocusObject()
 		if focus is None:
@@ -162,51 +209,36 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if not marks:
 			return context, []
 
-		try:
-			ti = focus.treeInterceptor
-			root = ti.rootNVDAObject if ti is not None else None
-		except Exception:
-			root = None
-		if root is None:
-			root = focus
-			try:
-				while root.parent is not None:
-					root = root.parent
-			except Exception:
-				pass
+		targets = [mark.get("signature") or {} for mark in marks]
+		wantedKeys = {(sig.get("role", 0), sig.get("name", "")) for sig in targets}
+		exact = [None] * len(marks)
+		loose = [None] * len(marks)
+		pending = len(marks)
 
-		from .elementRegistry import buildSignature, signaturesMatch
-
-		def iterObjects(start, maxNodes=5000):
-			queue = [start]
-			seen = 0
-			while queue and seen < maxNodes:
-				current = queue.pop(0)
-				seen += 1
-				yield current
-				try:
-					child = current.firstChild
-				except Exception:
-					child = None
-				while child is not None:
-					queue.append(child)
-					try:
-						child = child.next
-					except Exception:
-						break
+		# Un único recorrido del árbol para todas las marcas. Solo se
+		# calcula la firma completa de los objetos con rol y nombre
+		# compatibles con alguna marca.
+		for candidate in self._iterObjects(self._captureRoot(focus)):
+			if quickKey(candidate) not in wantedKeys:
+				continue
+			sig = buildSignature(candidate)
+			for i, target in enumerate(targets):
+				if exact[i] is not None:
+					continue
+				if signaturesMatch(sig, target, strict=True):
+					exact[i] = candidate
+					pending -= 1
+					break
+				if loose[i] is None and signaturesMatch(sig, target, strict=False):
+					loose[i] = candidate
+			if pending == 0:
+				break
 
 		results = []
-		for mark in marks:
-			targetSig = mark.get("signature")
-			label = mark.get("label") or ""
-			found = None
-			for candidate in iterObjects(root):
-				if signaturesMatch(buildSignature(candidate), targetSig):
-					found = candidate
-					break
-			value = self._extractValue(found) if found is not None else ""
-			results.append((label, value))
-
+		for i, mark in enumerate(marks):
+			found = exact[i] if exact[i] is not None else loose[i]
+			value = self._extractValue(found) if found is not None else None
+			results.append((mark.get("label") or "", value))
 		return context, results
 
 	@script(
@@ -264,8 +296,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			ui.message(_("No hay campos marcados para este contexto. Marque al menos uno con NVDA+Shift+M."))
 			return
 
-		outputDir = self._getOutputDir()
-		path = writeEntry(outputDir, context, values)
+		path = writeEntry(addonConfig.getOutputDir(), context, values)
 		if path is None:
 			# Translators: error al escribir
 			ui.message(_("Error al escribir el archivo. Revise el directorio de salida en el panel de gestión."))
@@ -274,8 +305,13 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		tones.beep(659, 40)
 		tones.beep(784, 60)
 		filename = os.path.basename(path)
+		missing = sum(1 for _label, value in values if value is None)
 		# Translators: confirmación de registro exitoso
-		ui.message(_("Registro guardado: {count} campos en {file}.").format(count=len(values), file=filename))
+		message = _("Registro guardado: {count} campos en {file}.").format(count=len(values), file=filename)
+		if missing:
+			# Translators: aviso de campos marcados que no se encontraron al registrar
+			message += " " + _("Atención: {missing} campos no se encontraron.").format(missing=missing)
+		ui.message(message)
 
 	@script(
 		# Translators: descripción del atajo para abrir el panel
@@ -290,8 +326,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			dlg = ManagementDialog(
 				gui.mainFrame,
 				self._registry,
-				self._getOutputDir,
-				self._setOutputDir,
+				addonConfig.getOutputDir,
+				addonConfig.setOutputDir,
 			)
 			gui.mainFrame.prePopup()
 			try:
@@ -308,9 +344,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		gesture="kb:NVDA+shift+p",
 	)
 	def script_announceDailyFile(self, gesture):
-		path = getDailyFilePath(self._getOutputDir())
-		exists = os.path.isfile(path)
-		if exists:
+		path = getDailyFilePath(addonConfig.getOutputDir())
+		if os.path.isfile(path):
 			size = os.path.getsize(path)
 			# Translators: anuncio cuando el archivo del día ya existe
 			ui.message(_("Archivo del día: {path}. Tamaño: {size} bytes.").format(path=path, size=size))

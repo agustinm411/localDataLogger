@@ -35,6 +35,27 @@ def _getConfigPath():
 	return os.path.join(configDir, _CONFIG_FILENAME)
 
 
+def _safeName(obj):
+	"""Nombre del objeto sin espacios sobrantes; "" si no se puede leer."""
+	try:
+		return (obj.name or "").strip()
+	except Exception:
+		return ""
+
+
+def quickKey(obj):
+	"""
+	Clave barata (rol, nombre) de un objeto. Sirve para descartar
+	rápidamente objetos que no pueden coincidir con ninguna marca sin
+	calcular el contexto ni la firma completa.
+	"""
+	try:
+		role = int(obj.role)
+	except Exception:
+		role = 0
+	return (role, _safeName(obj))
+
+
 def buildSignature(obj):
 	"""
 	Construye una firma estable para un NVDAObject.
@@ -46,16 +67,16 @@ def buildSignature(obj):
 		role = int(obj.role)
 	except Exception:
 		role = 0
-	name = (obj.name or "").strip()
+	name = _safeName(obj)
 
 	ancestors = []
-	parent = obj.parent
+	try:
+		parent = obj.parent
+	except Exception:
+		parent = None
 	depth = 0
 	while parent is not None and depth < _ANCESTOR_DEPTH:
-		try:
-			pname = (parent.name or "").strip()
-		except Exception:
-			pname = ""
+		pname = _safeName(parent)
 		try:
 			prole = int(parent.role)
 		except Exception:
@@ -85,8 +106,15 @@ def buildSignature(obj):
 	}
 
 
-def signaturesMatch(a, b):
-	"""Compara dos firmas tolerando pequeñas variaciones del árbol."""
+def signaturesMatch(a, b, strict=True):
+	"""
+	Compara dos firmas tolerando pequeñas variaciones del árbol.
+
+	En modo estricto también se compara siblingIndex, para distinguir
+	campos con el mismo rol, nombre y padre (p. ej. dos campos
+	"Teléfono" seguidos). El modo no estricto lo ignora y se usa como
+	respaldo al capturar valores, por si la página cambió el orden.
+	"""
 	if not a or not b:
 		return False
 	if a.get("role") != b.get("role"):
@@ -98,6 +126,8 @@ def signaturesMatch(a, b):
 	if aAnc and bAnc:
 		if aAnc[0] != bAnc[0]:
 			return False
+	if strict and a.get("siblingIndex", 0) != b.get("siblingIndex", 0):
+		return False
 	return True
 
 
@@ -247,12 +277,14 @@ class ElementRegistry:
 	def __init__(self):
 		self._lock = threading.RLock()
 		self._data = {}
+		self._quickKeys = frozenset()
 		self._load()
 
 	def _load(self):
 		path = _getConfigPath()
 		if not os.path.isfile(path):
 			self._data = {}
+			self._reindex()
 			return
 		try:
 			with open(path, "r", encoding="utf-8") as f:
@@ -263,8 +295,19 @@ class ElementRegistry:
 		except (OSError, ValueError) as e:
 			log.error(f"localDataLogger: no se pudo leer {path}: {e}")
 			self._data = {}
+		self._reindex()
+
+	def _reindex(self):
+		"""Recalcula el índice (rol, nombre) de todas las marcas."""
+		keys = set()
+		for entries in self._data.values():
+			for entry in entries:
+				sig = entry.get("signature") or {}
+				keys.add((sig.get("role", 0), sig.get("name", "")))
+		self._quickKeys = frozenset(keys)
 
 	def _save(self):
+		self._reindex()
 		path = _getConfigPath()
 		try:
 			tmpPath = path + ".tmp"
@@ -273,6 +316,14 @@ class ElementRegistry:
 			os.replace(tmpPath, path)
 		except OSError as e:
 			log.error(f"localDataLogger: no se pudo guardar {path}: {e}")
+
+	def couldBeMarked(self, obj):
+		"""
+		Filtro rápido: False si ningún contexto tiene una marca con el
+		mismo rol y nombre que el objeto. No calcula contexto ni firma.
+		"""
+		quickKeys = self._quickKeys
+		return bool(quickKeys) and quickKey(obj) in quickKeys
 
 	def addElement(self, obj, label=None):
 		"""
@@ -294,20 +345,20 @@ class ElementRegistry:
 	def removeElement(self, obj):
 		"""Quita la marca del objeto. Devuelve True si se quitó."""
 		with self._lock:
+			if not self.couldBeMarked(obj):
+				return False
 			context = getContextKey(obj)
 			sig = buildSignature(obj)
 			lst = self._data.get(context, [])
 			for i, entry in enumerate(lst):
 				if signaturesMatch(entry.get("signature"), sig):
-					del lst[i]
-					if not lst:
-						del self._data[context]
-					self._save()
-					return True
+					return self.removeAt(context, i)
 			return False
 
 	def isMarked(self, obj):
 		"""Indica si el objeto está marcado en su contexto actual."""
+		if not self.couldBeMarked(obj):
+			return False
 		with self._lock:
 			context = getContextKey(obj)
 			sig = buildSignature(obj)
@@ -319,12 +370,37 @@ class ElementRegistry:
 	def getMarksForContext(self, context):
 		"""Devuelve una copia de la lista de marcas para un contexto."""
 		with self._lock:
-			return list(self._data.get(context, []))
+			return [dict(entry) for entry in self._data.get(context, [])]
 
 	def getAllContexts(self):
 		"""Devuelve la lista de contextos con al menos una marca."""
 		with self._lock:
 			return list(self._data.keys())
+
+	def renameLabel(self, context, index, newLabel):
+		"""Cambia la etiqueta de la marca en la posición index. Devuelve True si cambió."""
+		newLabel = (newLabel or "").strip()
+		if not newLabel:
+			return False
+		with self._lock:
+			lst = self._data.get(context, [])
+			if not 0 <= index < len(lst):
+				return False
+			lst[index]["label"] = newLabel
+			self._save()
+			return True
+
+	def removeAt(self, context, index):
+		"""Quita la marca en la posición index de un contexto. Devuelve True si se quitó."""
+		with self._lock:
+			lst = self._data.get(context, [])
+			if not 0 <= index < len(lst):
+				return False
+			del lst[index]
+			if not lst:
+				del self._data[context]
+			self._save()
+			return True
 
 	def clearContext(self, context):
 		"""Borra todas las marcas de un contexto. Devuelve cuántas se borraron."""
