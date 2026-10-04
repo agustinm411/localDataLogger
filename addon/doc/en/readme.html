@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Local Data Logger - Complemento para NVDA</title>
+</head>
+<body>
+<h1>Local Data Logger</h1>
+<p><strong>Versión:</strong> 1.0.0<br>
+<strong>Autor:</strong> Agustin Martinez<br>
+<strong>Licencia:</strong> GNU General Public License v2<br>
+<strong>Compatibilidad:</strong> NVDA 2026.1 o superior</p>
+
+<h2>Descripción</h2>
+<p>Local Data Logger es un complemento para el lector de pantalla NVDA que captura
+datos de campos de formulario (en navegadores y en aplicaciones nativas accesibles)
+y los almacena localmente en archivos de texto agrupados por día. Está pensado
+como herramienta de respaldo ante fallas de conectividad o de servidores, para
+que la información gestionada no se pierda si el sistema principal cae.</p>
+
+<h2>Cómo funciona</h2>
+<ol>
+<li><strong>Marcar los campos</strong> que desea capturar: enfoque cada uno con
+Tab (o con el cursor del navegador en modo exploración) y pulse
+<kbd>NVDA+Shift+M</kbd>. NVDA confirma con un doble beep y dice
+"Objeto marcado para registro". La marca queda guardada de forma permanente,
+asociada a la URL (en navegadores) o al título de la ventana (en aplicaciones nativas).</li>
+<li><strong>Confirmar que un campo está marcado:</strong> al volver a enfocarlo,
+NVDA emite un beep agudo y anuncia "marcado para registro" tras la lectura
+normal. Esto sustituye al resaltado visual de la versión para Chrome.</li>
+<li><strong>Registrar una gestión:</strong> cuando los campos estén completados,
+pulse <kbd>NVDA+Shift+R</kbd>. El complemento captura los valores actuales
+de todos los campos marcados para ese contexto y los añade al archivo del día.</li>
+<li><strong>Gestionar las marcas:</strong> <kbd>NVDA+Shift+L</kbd> abre un panel
+que permite renombrar etiquetas, quitar campos, vaciar contextos completos y
+cambiar el directorio donde se guardan los registros.</li>
+</ol>
+
+<h2>Atajos por defecto</h2>
+<table border="1">
+<thead><tr><th>Atajo</th><th>Acción</th></tr></thead>
+<tbody>
+<tr><td><kbd>NVDA+Shift+M</kbd></td><td>Marcar el objeto enfocado.</td></tr>
+<tr><td><kbd>NVDA+Shift+U</kbd></td><td>Desmarcar el objeto enfocado.</td></tr>
+<tr><td><kbd>NVDA+Shift+R</kbd></td><td>Registrar la gestión actual (append al archivo del día).</td></tr>
+<tr><td><kbd>NVDA+Shift+L</kbd></td><td>Abrir el panel de gestión.</td></tr>
+<tr><td><kbd>NVDA+Shift+P</kbd></td><td>Anunciar la ruta del archivo del día.</td></tr>
+</tbody>
+</table>
+<p>Todos los atajos pueden reasignarse desde
+<em>Preferencias &gt; Gestos de entrada &gt; Local Data Logger</em>.</p>
+
+<h2>Formato del archivo</h2>
+<p>El archivo del día se denomina <code>AAAA-MM-DD.txt</code> y reside en el
+directorio configurado (por defecto, <code>Documents\LocalDataLogger</code>). Si
+ya existe, las nuevas gestiones se añaden al final (no se crean archivos como
+<code>registro(1).txt</code>). Ejemplo de contenido tras dos gestiones:</p>
+
+<pre>FECHA: 2026-04-29
+URL: https://crm-sistema.com/gestion
+------------------------------------------
+ID Cliente: 5542
+Acción: Llamada realizada
+Nota: Cliente interesado en renovación.
+------------------------------------------
+URL: https://crm-sistema.com/gestion
+------------------------------------------
+ID Cliente: 9981
+Acción: Ticket Cerrado
+Nota: Se resolvió incidencia técnica.
+------------------------------------------</pre>
+
+<h2>Privacidad</h2>
+<p>Todos los datos se escriben estrictamente en el disco local del usuario.
+El complemento no realiza ninguna comunicación con servidores externos ni
+con la nube. Tampoco envía telemetría.</p>
+
+<h2>Almacenamiento de la configuración</h2>
+<p>La lista de campos marcados se guarda en
+<code>%APPDATA%\nvda\localDataLogger_marks.json</code>. Las preferencias del
+directorio de salida y del comportamiento de los anuncios residen en
+<code>nvda.ini</code> bajo la sección <code>[localDataLogger]</code>.</p>
+
+<h2>Licencia</h2>
+<p>Este programa es software libre, distribuido bajo los términos de la
+<a href="https://www.gnu.org/licenses/old-licenses/gpl-2.0.html">Licencia
+Pública General de GNU versión 2</a>. Consulte el archivo <code>LICENSE.txt</code>
+incluido en el complemento para los detalles completos de la licencia.</p>
+</body>
+</html>
