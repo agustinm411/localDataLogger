@@ -6,7 +6,7 @@
 </head>
 <body>
 <h1>Local Data Logger</h1>
-<p><strong>Versión:</strong> 1.0.0<br>
+<p><strong>Versión:</strong> 1.1.0<br>
 <strong>Autor:</strong> Agustin Martinez<br>
 <strong>Licencia:</strong> GNU General Public License v2<br>
 <strong>Compatibilidad:</strong> NVDA 2026.1 o superior</p>
@@ -31,6 +31,9 @@ normal. Esto sustituye al resaltado visual de la versión para Chrome.</li>
 <li><strong>Registrar una gestión:</strong> cuando los campos estén completados,
 pulse <kbd>NVDA+Shift+R</kbd>. El complemento captura los valores actuales
 de todos los campos marcados para ese contexto y los añade al archivo del día.</li>
+<li><strong>Opciones:</strong> en <em>NVDA &gt; Preferencias &gt; Opciones &gt;
+Local Data Logger</em> puede activar o desactivar el pitido y el anuncio al
+enfocar un campo marcado.</li>
 <li><strong>Gestionar las marcas:</strong> <kbd>NVDA+Shift+L</kbd> abre un panel
 que permite renombrar etiquetas, quitar campos, vaciar contextos completos y
 cambiar el directorio donde se guardan los registros.</li>
@@ -54,17 +57,25 @@ cambiar el directorio donde se guardan los registros.</li>
 <p>El archivo del día se denomina <code>AAAA-MM-DD.txt</code> y reside en el
 directorio configurado (por defecto, <code>Documents\LocalDataLogger</code>). Si
 ya existe, las nuevas gestiones se añaden al final (no se crean archivos como
-<code>registro(1).txt</code>). Ejemplo de contenido tras dos gestiones:</p>
+<code>registro(1).txt</code>).</p>
+<p>La cabecera de contexto (<code>Aplicación:</code> y, en navegadores,
+<code>URL:</code>) solo se escribe cuando es distinta de la última cabecera del
+archivo. Las gestiones consecutivas en el mismo sitio o ventana quedan bajo una
+única cabecera. Cada gestión empieza con su hora (<code>HORA:</code>). Si un campo
+marcado no se encuentra en pantalla al registrar, se escribe
+<code>[no encontrado]</code> y NVDA lo avisa. Ejemplo de contenido tras dos
+gestiones:</p>
 
 <pre>FECHA: 2026-04-29
+Aplicación: chrome
 URL: https://crm-sistema.com/gestion
 ------------------------------------------
+HORA: 10:15:32
 ID Cliente: 5542
 Acción: Llamada realizada
 Nota: Cliente interesado en renovación.
 ------------------------------------------
-URL: https://crm-sistema.com/gestion
-------------------------------------------
+HORA: 10:21:07
 ID Cliente: 9981
 Acción: Ticket Cerrado
 Nota: Se resolvió incidencia técnica.
@@ -74,6 +85,9 @@ Nota: Se resolvió incidencia técnica.
 <p>Todos los datos se escriben estrictamente en el disco local del usuario.
 El complemento no realiza ninguna comunicación con servidores externos ni
 con la nube. Tampoco envía telemetría.</p>
+<p><strong>Importante:</strong> los archivos de registro se guardan en texto
+plano, sin cifrar. Si contienen datos personales o sensibles, guárdelos en una
+carpeta protegida y elimínelos cuando ya no sean necesarios.</p>
 
 <h2>Almacenamiento de la configuración</h2>
 <p>La lista de campos marcados se guarda en
