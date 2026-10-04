@@ -1,0 +1,20 @@
+Local Data Logger - Add-on para NVDA
+Copyright (C) 2026 Agustin Martinez
+
+Este programa es software libre: usted puede redistribuirlo y/o modificarlo
+bajo los términos de la Licencia Pública General de GNU publicada por la
+Free Software Foundation, en su versión 2 de la Licencia.
+
+Este programa se distribuye con la esperanza de que sea útil, pero SIN
+GARANTÍA ALGUNA; ni siquiera la garantía implícita MERCANTIL o de APTITUD
+PARA UN PROPÓSITO PARTICULAR. Vea la Licencia Pública General de GNU para
+más detalles.
+
+El texto completo de la Licencia Pública General de GNU versión 2 está
+disponible en:
+
+    https://www.gnu.org/licenses/old-licenses/gpl-2.0.txt
+    https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+
+Antes de redistribuir este complemento, incluya una copia íntegra de la
+licencia junto al código fuente, según exige la cláusula 1 de la GPL v2.
