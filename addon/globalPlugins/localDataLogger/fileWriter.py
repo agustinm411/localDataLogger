@@ -8,8 +8,10 @@ Implementa el contrato de la especificación:
   - El archivo del día se llama AAAA-MM-DD.txt.
   - Si ya existe, se hace append; nunca se crea registro(1).txt.
   - El primer bloque del día incluye la cabecera "FECHA: AAAA-MM-DD".
-  - En navegadores: muestra "Aplicación:" y "URL:" con la dirección real.
-  - En apps nativas: muestra solo "Aplicación:", sin línea "URL:".
+  - La cabecera de contexto ("Aplicación:" y, en navegadores, "URL:") solo
+    se escribe cuando difiere de la última cabecera del archivo. Si es la
+    misma, solo se añade el bloque de datos de la gestión.
+  - Cada gestión empieza con "HORA: HH:MM:SS".
   - No hay tráfico de red.
 """
 
@@ -22,20 +24,28 @@ from logHandler import log
 
 _writeLock = threading.RLock()
 _SEPARATOR = "-" * 42
+_DATE_PREFIX = "FECHA: "
+_TIME_PREFIX = "HORA: "
+_HEADER_PREFIXES = ("Aplicación: ", "URL: ")
+
+#: Valor que se escribe cuando un campo marcado no se encontró en pantalla.
+NOT_FOUND_VALUE = "[no encontrado]"
 
 
-def _todayDateString():
-	"""Devuelve la fecha de hoy en formato AAAA-MM-DD (hora local)."""
-	return datetime.date.today().strftime("%Y-%m-%d")
+def _todayDateString(now=None):
+	"""Devuelve la fecha en formato AAAA-MM-DD (hora local)."""
+	return (now or datetime.datetime.now()).strftime("%Y-%m-%d")
 
 
-def getDailyFilePath(outputDir):
+def getDailyFilePath(outputDir, now=None):
 	"""Ruta absoluta al archivo del día dentro de outputDir."""
-	return os.path.join(outputDir, f"{_todayDateString()}.txt")
+	return os.path.join(outputDir, f"{_todayDateString(now)}.txt")
 
 
 def ensureOutputDir(outputDir):
 	"""Crea el directorio de salida si no existe. Devuelve True si quedó listo."""
+	if not outputDir:
+		return False
 	try:
 		os.makedirs(outputDir, exist_ok=True)
 		return True
@@ -68,7 +78,7 @@ def _contextToLines(context):
 	# Formato "browser://appName/..." — navegador sin URL real
 	if context.startswith("browser://"):
 		rest = context[len("browser://"):]
-		appName = rest.split("/", 1)[0] if "/" in rest else rest
+		appName = rest.split("/", 1)[0]
 		return [f"Aplicación: {appName}"]
 
 	# Formato "app://appName/títuloVentana" — aplicación nativa
@@ -85,48 +95,47 @@ def _contextToLines(context):
 	return [f"URL: {context}"]
 
 
-def writeEntry(outputDir, url, fieldValues):
+def _isHeaderBlock(block):
 	"""
-	Añade una gestión al archivo del día.
-
-	Parámetros:
-	  outputDir: directorio donde reside el archivo diario.
-	  url: clave de contexto generada por elementRegistry.getContextKey().
-	  fieldValues: lista de tuplas (etiqueta, valor) en el orden en que
-	               el usuario marcó los campos.
-
-	Devuelve la ruta al archivo escrito, o None si falló.
-
-	Si el archivo del día no existe, escribe la línea "FECHA: AAAA-MM-DD"
-	como primer renglón. Si ya existe, no se repite: la fecha es global
-	del archivo, no de cada gestión.
+	Indica si un bloque (líneas entre separadores) es una cabecera de
+	contexto. Las cabeceras solo contienen líneas "Aplicación:" o "URL:".
+	Los bloques de datos empiezan con "HORA:" (o, en archivos de la
+	versión 1.0.0, con cualquier "etiqueta: valor").
 	"""
-	if not ensureOutputDir(outputDir):
+	if not block or block[0].startswith(_TIME_PREFIX):
+		return False
+	return all(line.startswith(_HEADER_PREFIXES) for line in block)
+
+
+def _lastHeaderInText(text):
+	"""Devuelve las líneas de la última cabecera de contexto del texto, o None."""
+	lastHeader = None
+	block = []
+	for line in text.splitlines() + [_SEPARATOR]:
+		if line == _SEPARATOR:
+			if _isHeaderBlock(block):
+				lastHeader = block
+			block = []
+		elif line.startswith(_DATE_PREFIX) and not block:
+			continue
+		else:
+			block.append(line)
+	return lastHeader
+
+
+def _readLastHeader(path):
+	"""Lee el archivo del día y devuelve su última cabecera, o None."""
+	try:
+		with open(path, "r", encoding="utf-8", errors="replace") as f:
+			return _lastHeaderInText(f.read())
+	except OSError as e:
+		log.warning(f"localDataLogger: no se pudo leer {path}: {e}")
 		return None
 
-	path = getDailyFilePath(outputDir)
-	isNewFile = not os.path.isfile(path)
 
-	lines = []
-	if isNewFile:
-		lines.append(f"FECHA: {_todayDateString()}")
-	lines.extend(_contextToLines(url))
-	lines.append(_SEPARATOR)
-	for label, value in fieldValues:
-		safeValue = _formatMultiline(value)
-		lines.append(f"{label}: {safeValue}")
-	lines.append(_SEPARATOR)
-
-	block = "\n".join(lines) + "\n"
-
-	with _writeLock:
-		try:
-			with open(path, "a", encoding="utf-8") as f:
-				f.write(block)
-			return path
-		except OSError as e:
-			log.error(f"localDataLogger: no se pudo escribir {path}: {e}")
-			return None
+def _formatLabel(label):
+	"""Las etiquetas ocupan una sola línea."""
+	return " ".join(str(label or "").split()) or "Campo"
 
 
 def _formatMultiline(value):
@@ -135,9 +144,9 @@ def _formatMultiline(value):
 	líneas continuación para distinguirlas del siguiente campo.
 	"""
 	if value is None:
-		return ""
+		return NOT_FOUND_VALUE
 	text = str(value)
-	if "\n" not in text:
+	if "\n" not in text and "\r" not in text:
 		return text
 	parts = text.splitlines()
 	if not parts:
@@ -145,3 +154,47 @@ def _formatMultiline(value):
 	first = parts[0]
 	rest = ["    " + p for p in parts[1:]]
 	return "\n".join([first] + rest)
+
+
+def writeEntry(outputDir, context, fieldValues, now=None):
+	"""
+	Añade una gestión al archivo del día.
+
+	Parámetros:
+	  outputDir: directorio donde reside el archivo diario.
+	  context: clave de contexto generada por elementRegistry.getContextKey().
+	  fieldValues: lista de tuplas (etiqueta, valor) en el orden en que
+	               el usuario marcó los campos. Un valor None indica que el
+	               campo no se encontró.
+	  now: datetime de la gestión (por defecto, la hora actual).
+
+	Devuelve la ruta al archivo escrito, o None si falló.
+	"""
+	if not ensureOutputDir(outputDir):
+		return None
+
+	now = now or datetime.datetime.now()
+	path = getDailyFilePath(outputDir, now)
+	headerLines = _contextToLines(context)
+
+	with _writeLock:
+		isNewFile = not os.path.isfile(path) or os.path.getsize(path) == 0
+		lines = []
+		if isNewFile:
+			lines.append(f"{_DATE_PREFIX}{_todayDateString(now)}")
+		if isNewFile or _readLastHeader(path) != headerLines:
+			lines.extend(headerLines)
+			lines.append(_SEPARATOR)
+		lines.append(f"{_TIME_PREFIX}{now.strftime('%H:%M:%S')}")
+		for label, value in fieldValues:
+			lines.append(f"{_formatLabel(label)}: {_formatMultiline(value)}")
+		lines.append(_SEPARATOR)
+		block = "\n".join(lines) + "\n"
+
+		try:
+			with open(path, "a", encoding="utf-8") as f:
+				f.write(block)
+			return path
+		except OSError as e:
+			log.error(f"localDataLogger: no se pudo escribir {path}: {e}")
+			return None
